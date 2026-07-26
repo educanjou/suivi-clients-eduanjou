@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, X, Trash2, Search, Check, Clock, CalendarClock } from "lucide-react";
+import { Plus, X, Trash2, Search, Check, Clock, CalendarClock, Bell, BellRing } from "lucide-react";
 import { supabase } from "./supabaseClient";
+import { subscribeToNotifications, getNotificationStatus } from "./pushNotifications";
+import { createCalendarEvent, isGoogleConfigured, defaultEventTitle } from "./googleCalendar";
 
 const TABLE = "fiches";
 
@@ -36,6 +38,14 @@ const URGENCY_STYLES = {
   future: { dot: "#5B6B73", text: "#5B6B73" },
 };
 
+const PRIORITY_STYLES = {
+  1: { bg: "#B3432B", label: "1 - Très urgent" },
+  2: { bg: "#C97A2B", label: "2 - Urgent" },
+  3: { bg: "#8A8478", label: "3 - Normal" },
+  4: { bg: "#5B6B73", label: "4 - Peu urgent" },
+  5: { bg: "#A6A297", label: "5 - Pas pressé" },
+};
+
 function emptyFiche(statut) {
   return {
     id: `f_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -50,10 +60,13 @@ function emptyFiche(statut) {
     formule: "",
     prix: "",
     dateProchainRdv: "",
+    heureProchainRdv: "",
+    dureeProchainRdv: 60,
     contratSigne: false,
     paye: false,
     dateRappel: "",
     noteRappel: "",
+    priorite: 3,
     statut: statut || "prospect",
   };
 }
@@ -73,10 +86,13 @@ function toRow(f) {
     formule: f.formule,
     prix: f.prix === "" || f.prix === null ? null : Number(f.prix),
     date_prochain_rdv: f.dateProchainRdv || null,
+    heure_prochain_rdv: f.heureProchainRdv || null,
+    duree_prochain_rdv: f.dureeProchainRdv || 60,
     contrat_signe: f.contratSigne,
     paye: f.paye,
     date_rappel: f.dateRappel || null,
     note_rappel: f.noteRappel,
+    priorite: f.priorite || 3,
     statut: f.statut,
   };
 }
@@ -95,10 +111,13 @@ function fromRow(r) {
     formule: r.formule || "",
     prix: r.prix ?? "",
     dateProchainRdv: r.date_prochain_rdv || "",
+    heureProchainRdv: r.heure_prochain_rdv || "",
+    dureeProchainRdv: r.duree_prochain_rdv || 60,
     contratSigne: !!r.contrat_signe,
     paye: !!r.paye,
     dateRappel: r.date_rappel || "",
     noteRappel: r.note_rappel || "",
+    priorite: r.priorite || 3,
     statut: r.statut || "prospect",
   };
 }
@@ -112,6 +131,27 @@ export default function App() {
   const [editing, setEditing] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [notifStatus, setNotifStatus] = useState("default");
+  const [notifBusy, setNotifBusy] = useState(false);
+  const [notifError, setNotifError] = useState("");
+
+  useEffect(() => {
+    getNotificationStatus().then(setNotifStatus);
+  }, []);
+
+  const handleEnableNotifications = async () => {
+    setNotifBusy(true);
+    setNotifError("");
+    try {
+      await subscribeToNotifications();
+      setNotifStatus("granted");
+    } catch (e) {
+      setNotifError(e.message);
+      const status = await getNotificationStatus();
+      setNotifStatus(status);
+    }
+    setNotifBusy(false);
+  };
 
   const loadFiches = useCallback(async () => {
     setLoadError(false);
@@ -188,7 +228,7 @@ export default function App() {
 
   const aFaire = fiches
     .filter((f) => matchesSearch(f) && (urgency(f.dateRappel) === "overdue" || urgency(f.dateRappel) === "today"))
-    .sort((a, b) => a.dateRappel.localeCompare(b.dateRappel));
+    .sort((a, b) => (a.priorite || 3) - (b.priorite || 3) || a.dateRappel.localeCompare(b.dateRappel));
 
   const byStatut = (statutId) => fiches.filter((f) => f.statut === statutId && matchesSearch(f));
 
@@ -222,6 +262,22 @@ export default function App() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {notifStatus !== "unsupported" && notifStatus !== "denied" && (
+              <button
+                onClick={handleEnableNotifications}
+                disabled={notifBusy || notifStatus === "granted"}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border focus:ring-2 focus:outline-none disabled:opacity-70"
+                style={
+                  notifStatus === "granted"
+                    ? { background: "#EAF0EA", color: "#2F5233", borderColor: "#2F5233" }
+                    : { background: "#FFFFFF", color: "#5B6B73", borderColor: "#DEE1D9" }
+                }
+                title={notifStatus === "granted" ? "Notifications activées" : "Activer les notifications quotidiennes"}
+              >
+                {notifStatus === "granted" ? <BellRing size={15} /> : <Bell size={15} />}
+                {notifStatus === "granted" ? "Notifs activées" : "Activer les notifs"}
+              </button>
+            )}
             <div className="relative">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8A8478" }} />
               <input
@@ -241,6 +297,11 @@ export default function App() {
             </button>
           </div>
         </div>
+        {notifError && (
+          <p className="max-w-[1400px] mx-auto px-5 pb-2 text-xs" style={{ color: "#B3432B" }}>
+            {notifError}
+          </p>
+        )}
       </header>
 
       <main className="max-w-[1400px] mx-auto px-5 py-6 overflow-x-auto">
@@ -291,6 +352,7 @@ export default function App() {
 
       {editing && (
         <FicheModal
+          key={editing.id}
           fiche={editing}
           onChange={setEditing}
           onSave={saveFiche}
@@ -369,7 +431,18 @@ function Card({ fiche, onClick, readOnlyDrag, onValidate, onReschedule }) {
     >
       <div className="card-tab" style={{ background: u ? URGENCY_STYLES[u].dot : "#D6D9D2" }} />
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-semibold leading-tight" style={{ color: "#1E2A22" }}>{fiche.prenom} {fiche.nom}</p>
+        <div className="flex items-start gap-1.5">
+          {readOnlyDrag && (
+            <span
+              className="shrink-0 w-4 h-4 rounded-full flex items-center justify-center font-mono text-[9px] font-bold text-white mt-0.5"
+              style={{ background: PRIORITY_STYLES[fiche.priorite || 3].bg }}
+              title={PRIORITY_STYLES[fiche.priorite || 3].label}
+            >
+              {fiche.priorite || 3}
+            </span>
+          )}
+          <p className="text-sm font-semibold leading-tight" style={{ color: "#1E2A22" }}>{fiche.prenom} {fiche.nom}</p>
+        </div>
         <div className="flex flex-col items-end gap-0.5 shrink-0">
           {fiche.paye ? (
             <span className="flex items-center gap-1" title="Payé" style={{ color: "#2F5233" }}>
@@ -438,6 +511,22 @@ function Card({ fiche, onClick, readOnlyDrag, onValidate, onReschedule }) {
 function FicheModal({ fiche, onChange, onSave, onDelete, onClose, confirmDelete, onConfirmDelete, onCancelDelete, isNew }) {
   const set = (patch) => onChange({ ...fiche, ...patch });
   const canSave = fiche.prenom.trim() && fiche.nom.trim();
+  const [calState, setCalState] = useState("idle"); // idle | loading | done | error
+  const [calMessage, setCalMessage] = useState("");
+  const [eventTitle, setEventTitle] = useState(() => defaultEventTitle(fiche));
+
+  const handleAddToCalendar = async () => {
+    setCalState("loading");
+    setCalMessage("");
+    try {
+      await createCalendarEvent(fiche, eventTitle);
+      setCalState("done");
+      setCalMessage("Ajouté à Google Agenda.");
+    } catch (e) {
+      setCalState("error");
+      setCalMessage(e.message || "Erreur inconnue.");
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-30 flex items-center justify-center p-4" style={{ background: "rgba(30,42,34,0.35)" }} onClick={onClose}>
@@ -510,13 +599,60 @@ function FicheModal({ fiche, onChange, onSave, onDelete, onClose, confirmDelete,
           </div>
 
           <div className="flex gap-2.5">
+            <Field label="Heure du rdv">
+              <input type="time" className="input" value={fiche.heureProchainRdv} onChange={(e) => set({ heureProchainRdv: e.target.value })} />
+            </Field>
+            <Field label="Durée">
+              <select className="input" value={fiche.dureeProchainRdv || 60} onChange={(e) => set({ dureeProchainRdv: Number(e.target.value) })}>
+                <option value={30}>30 min</option>
+                <option value={45}>45 min</option>
+                <option value={60}>1h</option>
+                <option value={90}>1h30</option>
+                <option value={120}>2h</option>
+                <option value={150}>2h30</option>
+              </select>
+            </Field>
+          </div>
+
+          {isGoogleConfigured() && fiche.dateProchainRdv && (
+            <div className="flex flex-col gap-2 p-3 rounded-lg" style={{ background: "#F3F5F1" }}>
+              <Field label="Titre du rendez-vous (Google Agenda)">
+                <input className="input" value={eventTitle} onChange={(e) => setEventTitle(e.target.value)} />
+              </Field>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleAddToCalendar}
+                  disabled={calState === "loading"}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border focus:ring-2 focus:outline-none disabled:opacity-60"
+                  style={{ background: "#FFFFFF", color: "#5B6B73", borderColor: "#DEE1D9" }}
+                >
+                  📅 {calState === "loading" ? "Ajout en cours…" : "Ajouter à Google Agenda"}
+                </button>
+                {calMessage && (
+                  <span className="text-[11px]" style={{ color: calState === "error" ? "#B3432B" : "#2F5233" }}>
+                    {calMessage}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2.5">
             <Field label="Date de rappel">
               <input type="date" className="input" value={fiche.dateRappel} onChange={(e) => set({ dateRappel: e.target.value })} />
             </Field>
-            <Field label="Note à faire">
-              <input className="input" value={fiche.noteRappel} onChange={(e) => set({ noteRappel: e.target.value })} placeholder="Ex : relancer pour le paiement" />
+            <Field label="Priorité">
+              <select className="input" value={fiche.priorite || 3} onChange={(e) => set({ priorite: Number(e.target.value) })}>
+                {[1, 2, 3, 4, 5].map((p) => (
+                  <option key={p} value={p}>{PRIORITY_STYLES[p].label}</option>
+                ))}
+              </select>
             </Field>
           </div>
+
+          <Field label="Note à faire">
+            <input className="input" value={fiche.noteRappel} onChange={(e) => set({ noteRappel: e.target.value })} placeholder="Ex : relancer pour le paiement" />
+          </Field>
 
           <div className="flex gap-2">
             <button
