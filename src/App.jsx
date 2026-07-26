@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, X, Trash2, Search, Check, Clock, CalendarClock, Bell, BellRing } from "lucide-react";
+import { Plus, X, Trash2, Search, Check, Clock, CalendarClock } from "lucide-react";
 import { supabase } from "./supabaseClient";
-import { subscribeToNotifications, getNotificationStatus } from "./pushNotifications";
 import { createCalendarEvent, isGoogleConfigured, defaultEventTitle } from "./googleCalendar";
 
 const TABLE = "fiches";
@@ -131,27 +130,6 @@ export default function App() {
   const [editing, setEditing] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [notifStatus, setNotifStatus] = useState("default");
-  const [notifBusy, setNotifBusy] = useState(false);
-  const [notifError, setNotifError] = useState("");
-
-  useEffect(() => {
-    getNotificationStatus().then(setNotifStatus);
-  }, []);
-
-  const handleEnableNotifications = async () => {
-    setNotifBusy(true);
-    setNotifError("");
-    try {
-      await subscribeToNotifications();
-      setNotifStatus("granted");
-    } catch (e) {
-      setNotifError(e.message);
-      const status = await getNotificationStatus();
-      setNotifStatus(status);
-    }
-    setNotifBusy(false);
-  };
 
   const loadFiches = useCallback(async () => {
     setLoadError(false);
@@ -251,9 +229,9 @@ export default function App() {
       `}</style>
 
       <header className="sticky top-0 z-20 border-b" style={{ background: "#F3F5F1F0", borderColor: "#DEE1D9", backdropFilter: "blur(6px)" }}>
-        <div className="max-w-[1400px] mx-auto px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
+        <div className="max-w-[1400px] mx-auto px-4 sm:px-5 py-3 sm:py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h1 className="font-display text-2xl" style={{ color: "#1E2A22" }}>
+            <h1 className="font-display text-xl sm:text-2xl" style={{ color: "#1E2A22" }}>
               Éduc'Anjou <span style={{ color: "#5B6B73" }}>· Suivi clients</span>
             </h1>
             <p className="font-mono text-xs mt-0.5" style={{ color: "#8A8478" }}>
@@ -261,50 +239,29 @@ export default function App() {
               {saveState === "saving" ? "enregistrement…" : saveState === "saved" ? "enregistré" : saveState === "error" ? "erreur d'enregistrement" : ""}
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            {notifStatus !== "unsupported" && notifStatus !== "denied" && (
-              <button
-                onClick={handleEnableNotifications}
-                disabled={notifBusy || notifStatus === "granted"}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border focus:ring-2 focus:outline-none disabled:opacity-70"
-                style={
-                  notifStatus === "granted"
-                    ? { background: "#EAF0EA", color: "#2F5233", borderColor: "#2F5233" }
-                    : { background: "#FFFFFF", color: "#5B6B73", borderColor: "#DEE1D9" }
-                }
-                title={notifStatus === "granted" ? "Notifications activées" : "Activer les notifications quotidiennes"}
-              >
-                {notifStatus === "granted" ? <BellRing size={15} /> : <Bell size={15} />}
-                {notifStatus === "granted" ? "Notifs activées" : "Activer les notifs"}
-              </button>
-            )}
-            <div className="relative">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="relative flex-1 sm:flex-none min-w-0">
               <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8A8478" }} />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Rechercher un client, un chien…"
-                className="pl-9 pr-3 py-2 rounded-lg text-sm outline-none border focus:ring-2"
-                style={{ borderColor: "#DEE1D9", background: "#FFFFFF", width: 240, color: "#1E2A22" }}
+                placeholder="Rechercher…"
+                className="pl-9 pr-3 py-2 rounded-lg text-sm outline-none border focus:ring-2 w-full sm:w-60"
+                style={{ borderColor: "#DEE1D9", background: "#FFFFFF", color: "#1E2A22" }}
               />
             </div>
             <button
               onClick={() => setEditing(emptyFiche("prospect"))}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium text-white transition-transform active:scale-95 focus:ring-2 focus:outline-none"
+              className="shrink-0 flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-lg text-sm font-medium text-white transition-transform active:scale-95 focus:ring-2 focus:outline-none"
               style={{ background: "#2F5233" }}
             >
               <Plus size={16} /> Nouvelle fiche
             </button>
           </div>
         </div>
-        {notifError && (
-          <p className="max-w-[1400px] mx-auto px-5 pb-2 text-xs" style={{ color: "#B3432B" }}>
-            {notifError}
-          </p>
-        )}
       </header>
 
-      <main className="max-w-[1400px] mx-auto px-5 py-6 overflow-x-auto">
+      <main className="max-w-[1400px] mx-auto px-4 sm:px-5 py-6 overflow-x-auto">
         {!loaded ? (
           <p className="text-sm" style={{ color: "#8A8478" }}>Chargement…</p>
         ) : loadError ? (
