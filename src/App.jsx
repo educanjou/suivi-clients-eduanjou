@@ -16,6 +16,15 @@ const STATUTS = [
 const SUPPORTS = ["SMS", "WhatsApp", "Appel"];
 const SOURCES = ["Site", "Calendly", "Whatsapp", "Ads", "Mail", "Bouche à oreille", "Autre"];
 
+// Quelles bulles afficher sur la carte, selon la colonne (statut) de la fiche
+const PILL_VISIBILITY = {
+  prospect: [],
+  edc: ["edcPaye"],
+  accompagnement: ["paye", "contrat", "edcPaye"],
+  ancien: ["paye", "contrat", "edcPaye", "avis"],
+  sans_suite: [],
+};
+
 function urgency(dateRappel) {
   if (!dateRappel) return null;
   const today = new Date();
@@ -631,6 +640,13 @@ function StatsPage({ fiches }) {
   const avisRepondus = fiches.filter((f) => f.statut === "accompagnement" || f.statut === "ancien");
   const avisOkCount = avisRepondus.filter((f) => f.avisOk).length;
 
+  const prospectCount = fiches.filter((f) => f.statut === "prospect").length;
+  const edcCount = fiches.filter((f) => f.statut === "edc").length;
+  const accompagnementTotal = clientsActifs + anciens;
+  const sansSuiteCount = fiches.filter((f) => f.statut === "sans_suite").length;
+  const traites = edcCount + accompagnementTotal + sansSuiteCount; // fiches ayant dépassé le simple statut "prospect"
+  const pct = (n) => (traites ? Math.round((n / traites) * 100) : 0);
+
   const countBy = (key) => {
     const map = {};
     fiches.forEach((f) => {
@@ -658,6 +674,29 @@ function StatsPage({ fiches }) {
         <StatCard label="CA encaissé" value={fmtEuro(totalEncaisse)} />
         <StatCard label="Impayés" value={fmtEuro(totalImpaye)} sub={`${impayesCount} fiche(s) concernée(s)`} />
         <StatCard label="Avis clients OK" value={avisRepondus.length ? `${avisOkCount}/${avisRepondus.length}` : "—"} sub="sur clients / anciens clients" />
+      </div>
+
+      <div className="rounded-xl p-4 bg-white mb-4" style={{ border: "1px solid #E7E5DE" }}>
+        <p className="text-sm font-semibold mb-1" style={{ color: "#1E2A22" }}>Entonnoir de conversion</p>
+        <p className="text-xs mb-3" style={{ color: "#8A8478" }}>
+          Basé sur la répartition actuelle des fiches (pas un historique de parcours).
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <StatCard label="Prospects (pas encore traités)" value={prospectCount} />
+          <StatCard label="S'arrêtent à l'EDC" value={edcCount} sub={`${pct(edcCount)}% des fiches traitées`} />
+          <StatCard label="Vont jusqu'à l'accompagnement" value={accompagnementTotal} sub={`${pct(accompagnementTotal)}% des fiches traitées`} />
+          <StatCard label="Sans suite" value={sansSuiteCount} sub={`${pct(sansSuiteCount)}% des fiches traitées`} />
+        </div>
+        <div className="flex items-stretch gap-1.5 h-8 rounded-lg overflow-hidden" style={{ background: "#EEF1F1" }}>
+          {edcCount > 0 && <div style={{ width: `${pct(edcCount)}%`, background: "#B8863B" }} title={`EDC : ${edcCount}`} />}
+          {accompagnementTotal > 0 && <div style={{ width: `${pct(accompagnementTotal)}%`, background: "#2F5233" }} title={`Accompagnement / Anciens : ${accompagnementTotal}`} />}
+          {sansSuiteCount > 0 && <div style={{ width: `${pct(sansSuiteCount)}%`, background: "#A65C52" }} title={`Sans suite : ${sansSuiteCount}`} />}
+        </div>
+        <div className="flex flex-wrap gap-3 mt-2 text-[11px]" style={{ color: "#8A8478" }}>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#B8863B" }} />EDC</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#2F5233" }} />Accompagnement / Anciens</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block" style={{ background: "#A65C52" }} />Sans suite</span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
@@ -783,12 +822,18 @@ function Card({ fiche, onClick, readOnlyDrag, onValidate, onReschedule, dropIndi
           <p className="text-sm font-semibold leading-tight" style={{ color: "#1E2A22" }}>{fiche.prenom} {fiche.nom}</p>
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <Pill ok={fiche.paye} okLabel="payé" koLabel="non payé" />
-          {fiche.statut !== "prospect" && fiche.statut !== "edc" && (
+          {PILL_VISIBILITY[fiche.statut]?.includes("paye") && (
+            <Pill ok={fiche.paye} okLabel="payé" koLabel="non payé" />
+          )}
+          {PILL_VISIBILITY[fiche.statut]?.includes("contrat") && (
             <Pill ok={fiche.contratSigne} okLabel="contrat" koLabel="sans contrat" />
           )}
-          <Pill ok={fiche.edcPaye} okLabel="EDC payé" koLabel="EDC non payé" />
-          <Pill ok={fiche.avisOk} okLabel="avis ok" koLabel="avis non ok" />
+          {PILL_VISIBILITY[fiche.statut]?.includes("edcPaye") && (
+            <Pill ok={fiche.edcPaye} okLabel="EDC payé" koLabel="EDC non payé" />
+          )}
+          {PILL_VISIBILITY[fiche.statut]?.includes("avis") && (
+            <Pill ok={fiche.avisOk} okLabel="avis ok" koLabel="avis non ok" />
+          )}
         </div>
       </div>
       {fiche.adresse && <p className="text-[11px] mt-0.5" style={{ color: "#8A8478" }}>📍 {fiche.adresse}</p>}
