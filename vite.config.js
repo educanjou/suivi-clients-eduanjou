@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["icons/icon-192.png", "icons/icon-512.png"],
+      includeAssets: ["icons/icon-v2-192.png", "icons/icon-v2-512.png"],
       manifest: {
         name: "Éduc'Anjou - Suivi clients",
         short_name: "Suivi clients",
@@ -17,9 +17,9 @@ export default defineConfig({
         background_color: "#F3F5F1",
         theme_color: "#2F5233",
         icons: [
-          { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
-          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
-          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+          { src: "icons/icon-v2-192.png", sizes: "192x192", type: "image/png" },
+          { src: "icons/icon-v2-512.png", sizes: "512x512", type: "image/png" },
+          { src: "icons/icon-v2-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
       },
     }),

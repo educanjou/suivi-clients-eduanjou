@@ -7,8 +7,10 @@ const TABLE = "fiches";
 
 const STATUTS = [
   { id: "prospect", label: "Prospects", accent: "#5B6B73", bg: "#EEF1F1" },
-  { id: "client", label: "Clients", accent: "#2F5233", bg: "#EAF0EA" },
+  { id: "edc", label: "EDC", accent: "#B8863B", bg: "#F5EEDD" },
+  { id: "accompagnement", label: "Accompagnement domicile", accent: "#2F5233", bg: "#EAF0EA" },
   { id: "ancien", label: "Anciens clients", accent: "#8A8478", bg: "#F1F0EC" },
+  { id: "sans_suite", label: "Sans suite", accent: "#A65C52", bg: "#F3EAE8" },
 ];
 
 const SUPPORTS = ["SMS", "WhatsApp", "Appel"];
@@ -63,9 +65,15 @@ function emptyFiche(statut) {
     dureeProchainRdv: 60,
     contratSigne: false,
     paye: false,
+    edcPaye: false,
+    avisOk: false,
+    prixEdc: "",
+    datePriseContact: "",
+    dateFinAccompagnement: "",
     dateRappel: "",
     noteRappel: "",
     priorite: 3,
+    ordre: null,
     statut: statut || "prospect",
   };
 }
@@ -89,9 +97,15 @@ function toRow(f) {
     duree_prochain_rdv: f.dureeProchainRdv || 60,
     contrat_signe: f.contratSigne,
     paye: f.paye,
+    edc_paye: f.edcPaye,
+    avis_ok: f.avisOk,
+    prix_edc: f.prixEdc === "" || f.prixEdc === null ? null : Number(f.prixEdc),
+    date_prise_contact: f.datePriseContact || null,
+    date_fin_accompagnement: f.dateFinAccompagnement || null,
     date_rappel: f.dateRappel || null,
     note_rappel: f.noteRappel,
     priorite: f.priorite || 3,
+    ordre: f.ordre ?? null,
     statut: f.statut,
   };
 }
@@ -114,9 +128,15 @@ function fromRow(r) {
     dureeProchainRdv: r.duree_prochain_rdv || 60,
     contratSigne: !!r.contrat_signe,
     paye: !!r.paye,
+    edcPaye: !!r.edc_paye,
+    avisOk: !!r.avis_ok,
+    prixEdc: r.prix_edc ?? "",
+    datePriseContact: r.date_prise_contact || "",
+    dateFinAccompagnement: r.date_fin_accompagnement || "",
     dateRappel: r.date_rappel || "",
     noteRappel: r.note_rappel || "",
     priorite: r.priorite || 3,
+    ordre: r.ordre ?? null,
     statut: r.statut || "prospect",
   };
 }
@@ -130,6 +150,8 @@ export default function App() {
   const [editing, setEditing] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [view, setView] = useState("board"); // board | stats
+  const [dropIndicator, setDropIndicator] = useState(null); // { cardId, pos: 'before'|'after' }
 
   const loadFiches = useCallback(async () => {
     setLoadError(false);
@@ -193,6 +215,45 @@ export default function App() {
   const validateRappel = (id) => patchFiche(id, { dateRappel: "", noteRappel: "" });
   const rescheduleRappel = (id, newDate) => patchFiche(id, { dateRappel: newDate });
 
+  // Réordonne manuellement une fiche à l'intérieur d'une colonne (ou en la déplaçant depuis une autre colonne)
+  const reorderColumn = async (draggedId, statutId, targetId, position) => {
+    setDropIndicator(null);
+    const columnIds = fiches
+      .filter((f) => f.statut === statutId && f.id !== draggedId)
+      .sort((a, b) => (a.ordre ?? 999999) - (b.ordre ?? 999999))
+      .map((f) => f.id);
+
+    let insertAt = targetId ? columnIds.indexOf(targetId) : columnIds.length;
+    if (insertAt === -1) insertAt = columnIds.length;
+    if (targetId && position === "after") insertAt += 1;
+    columnIds.splice(insertAt, 0, draggedId);
+
+    const updates = columnIds.map((id, idx) => ({ id, ordre: idx }));
+
+    setSaveState("saving");
+    setFiches((prev) =>
+      prev.map((f) => {
+        const u = updates.find((u) => u.id === f.id);
+        if (!u) return f;
+        return { ...f, ordre: u.ordre, statut: f.id === draggedId ? statutId : f.statut };
+      })
+    );
+
+    try {
+      await Promise.all(
+        updates.map((u) =>
+          supabase
+            .from(TABLE)
+            .update(u.id === draggedId ? { ordre: u.ordre, statut: statutId } : { ordre: u.ordre })
+            .eq("id", u.id)
+        )
+      );
+      flash(true);
+    } catch (e) {
+      flash(false);
+    }
+  };
+
   const matchesSearch = (f) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -208,7 +269,10 @@ export default function App() {
     .filter((f) => matchesSearch(f) && (urgency(f.dateRappel) === "overdue" || urgency(f.dateRappel) === "today"))
     .sort((a, b) => (a.priorite || 3) - (b.priorite || 3) || a.dateRappel.localeCompare(b.dateRappel));
 
-  const byStatut = (statutId) => fiches.filter((f) => f.statut === statutId && matchesSearch(f));
+  const byStatut = (statutId) =>
+    fiches
+      .filter((f) => f.statut === statutId && matchesSearch(f))
+      .sort((a, b) => (a.ordre ?? 999999) - (b.ordre ?? 999999));
 
   return (
     <div className="min-h-screen w-full" style={{ background: "#F3F5F1", fontFamily: "'Inter', sans-serif" }}>
@@ -240,27 +304,50 @@ export default function App() {
             </p>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
-            <div className="relative flex-1 sm:flex-none min-w-0">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8A8478" }} />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Rechercher…"
-                className="pl-9 pr-3 py-2 rounded-lg text-sm outline-none border focus:ring-2 w-full sm:w-60"
-                style={{ borderColor: "#DEE1D9", background: "#FFFFFF", color: "#1E2A22" }}
-              />
+            <div className="flex rounded-lg overflow-hidden border shrink-0" style={{ borderColor: "#DEE1D9" }}>
+              <button
+                onClick={() => setView("board")}
+                className="px-3 py-2 text-sm font-medium focus:outline-none"
+                style={view === "board" ? { background: "#2F5233", color: "#FFFFFF" } : { background: "#FFFFFF", color: "#5B6B73" }}
+              >
+                Tableau
+              </button>
+              <button
+                onClick={() => setView("stats")}
+                className="px-3 py-2 text-sm font-medium focus:outline-none"
+                style={view === "stats" ? { background: "#2F5233", color: "#FFFFFF" } : { background: "#FFFFFF", color: "#5B6B73" }}
+              >
+                📊 Statistiques
+              </button>
             </div>
-            <button
-              onClick={() => setEditing(emptyFiche("prospect"))}
-              className="shrink-0 flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-lg text-sm font-medium text-white transition-transform active:scale-95 focus:ring-2 focus:outline-none"
-              style={{ background: "#2F5233" }}
-            >
-              <Plus size={16} /> Nouvelle fiche
-            </button>
+            {view === "board" && (
+              <div className="relative flex-1 sm:flex-none min-w-0">
+                <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#8A8478" }} />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Rechercher…"
+                  className="pl-9 pr-3 py-2 rounded-lg text-sm outline-none border focus:ring-2 w-full sm:w-60"
+                  style={{ borderColor: "#DEE1D9", background: "#FFFFFF", color: "#1E2A22" }}
+                />
+              </div>
+            )}
+            {view === "board" && (
+              <button
+                onClick={() => setEditing(emptyFiche("prospect"))}
+                className="shrink-0 flex items-center gap-1.5 px-3 sm:px-4 py-2 rounded-lg text-sm font-medium text-white transition-transform active:scale-95 focus:ring-2 focus:outline-none"
+                style={{ background: "#2F5233" }}
+              >
+                <Plus size={16} /> Nouvelle fiche
+              </button>
+            )}
           </div>
         </div>
       </header>
 
+      {view === "stats" ? (
+        <StatsPage fiches={fiches} />
+      ) : (
       <main className="max-w-[1400px] mx-auto px-4 sm:px-5 py-6 overflow-x-auto">
         {!loaded ? (
           <p className="text-sm" style={{ color: "#8A8478" }}>Chargement…</p>
@@ -292,20 +379,33 @@ export default function App() {
                 bg={s.bg}
                 count={byStatut(s.id).length}
                 onAdd={() => setEditing(emptyFiche(s.id))}
-                onDrop={(id) => moveFiche(id, s.id)}
+                onDrop={(id) => {
+                  if (dropIndicator && dropIndicator.statutId === s.id) {
+                    reorderColumn(id, s.id, dropIndicator.cardId, dropIndicator.pos);
+                  } else {
+                    reorderColumn(id, s.id, null, "after");
+                  }
+                }}
                 isDragOver={dragOverCol === s.id}
                 onDragOverCol={() => setDragOverCol(s.id)}
                 onDragLeaveCol={() => setDragOverCol(null)}
               >
                 {byStatut(s.id).length === 0 && <EmptyState text="Aucune fiche ici." />}
                 {byStatut(s.id).map((f) => (
-                  <Card key={f.id} fiche={f} onClick={() => setEditing(f)} />
+                  <Card
+                    key={f.id}
+                    fiche={f}
+                    onClick={() => setEditing(f)}
+                    dropIndicator={dropIndicator}
+                    onCardDragOver={(pos) => setDropIndicator({ cardId: f.id, statutId: s.id, pos })}
+                  />
                 ))}
               </Column>
             ))}
           </div>
         )}
       </main>
+      )}
 
       {editing && (
         <FicheModal
@@ -330,6 +430,117 @@ export default function App() {
 
 function EmptyState({ text }) {
   return <p className="text-xs italic px-1 py-3" style={{ color: "#A6A297" }}>{text}</p>;
+}
+
+function StatCard({ label, value, sub }) {
+  return (
+    <div className="rounded-xl p-4 bg-white" style={{ border: "1px solid #E7E5DE" }}>
+      <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: "#8A8478" }}>{label}</p>
+      <p className="font-display text-2xl mt-1" style={{ color: "#1E2A22" }}>{value}</p>
+      {sub && <p className="text-xs mt-0.5" style={{ color: "#8A8478" }}>{sub}</p>}
+    </div>
+  );
+}
+
+function BarList({ title, data, total }) {
+  return (
+    <div className="rounded-xl p-4 bg-white" style={{ border: "1px solid #E7E5DE" }}>
+      <p className="text-sm font-semibold mb-3" style={{ color: "#1E2A22" }}>{title}</p>
+      {data.length === 0 && <p className="text-xs italic" style={{ color: "#A6A297" }}>Pas encore de données.</p>}
+      <div className="flex flex-col gap-2">
+        {data.map(([label, count]) => (
+          <div key={label}>
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span style={{ color: "#4A4A44" }}>{label}</span>
+              <span className="font-mono" style={{ color: "#8A8478" }}>{count}</span>
+            </div>
+            <div className="h-1.5 rounded-full" style={{ background: "#EEF1F1" }}>
+              <div className="h-1.5 rounded-full" style={{ width: `${total ? (count / total) * 100 : 0}%`, background: "#2F5233" }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatsPage({ fiches }) {
+  const total = fiches.length;
+  const num = (v) => Number(v) || 0;
+
+  const parStatut = STATUTS.map((s) => ({ ...s, count: fiches.filter((f) => f.statut === s.id).length }));
+  const clientsActifs = fiches.filter((f) => f.statut === "accompagnement").length;
+  const anciens = fiches.filter((f) => f.statut === "ancien").length;
+
+  const totalCA = fiches.reduce((sum, f) => sum + num(f.prix) + num(f.prixEdc), 0);
+  const totalEncaisse = fiches.reduce((sum, f) => sum + (f.paye ? num(f.prix) : 0) + (f.edcPaye ? num(f.prixEdc) : 0), 0);
+  const totalImpaye = totalCA - totalEncaisse;
+
+  const fichesAvecPrix = fiches.filter((f) => num(f.prix) + num(f.prixEdc) > 0);
+  const prixMoyen = fichesAvecPrix.length ? totalCA / fichesAvecPrix.length : 0;
+
+  const tauxConversion = total ? ((clientsActifs + anciens) / total) * 100 : 0;
+
+  const impayesCount = fiches.filter((f) => (num(f.prix) > 0 && !f.paye) || (num(f.prixEdc) > 0 && !f.edcPaye)).length;
+
+  const avisRepondus = fiches.filter((f) => f.statut === "accompagnement" || f.statut === "ancien");
+  const avisOkCount = avisRepondus.filter((f) => f.avisOk).length;
+
+  const countBy = (key) => {
+    const map = {};
+    fiches.forEach((f) => {
+      const v = f[key];
+      if (v) map[v] = (map[v] || 0) + 1;
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  };
+
+  const parSource = countBy("source");
+  const parSupport = countBy("support");
+
+  const fmtEuro = (n) => n.toLocaleString("fr-FR", { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + " €";
+
+  return (
+    <main className="max-w-[1400px] mx-auto px-4 sm:px-5 py-6">
+      <h2 className="font-display text-xl mb-4" style={{ color: "#1E2A22" }}>Vue d'ensemble de l'activité</h2>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
+        <StatCard label="Total fiches" value={total} />
+        <StatCard label="Clients en accompagnement" value={clientsActifs} />
+        <StatCard label="Taux de conversion" value={`${tauxConversion.toFixed(0)}%`} sub="prospects → clients" />
+        <StatCard label="Prix moyen / client" value={fmtEuro(prixMoyen)} sub={`sur ${fichesAvecPrix.length} fiches facturées`} />
+        <StatCard label="CA total (facturé)" value={fmtEuro(totalCA)} />
+        <StatCard label="CA encaissé" value={fmtEuro(totalEncaisse)} />
+        <StatCard label="Impayés" value={fmtEuro(totalImpaye)} sub={`${impayesCount} fiche(s) concernée(s)`} />
+        <StatCard label="Avis clients OK" value={avisRepondus.length ? `${avisOkCount}/${avisRepondus.length}` : "—"} sub="sur clients / anciens clients" />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        <div className="rounded-xl p-4 bg-white" style={{ border: "1px solid #E7E5DE" }}>
+          <p className="text-sm font-semibold mb-3" style={{ color: "#1E2A22" }}>Répartition par colonne</p>
+          <div className="flex flex-col gap-2">
+            {parStatut.map((s) => (
+              <div key={s.id}>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="flex items-center gap-1.5" style={{ color: "#4A4A44" }}>
+                    <span className="w-2 h-2 rounded-full inline-block" style={{ background: s.accent }} />
+                    {s.label}
+                  </span>
+                  <span className="font-mono" style={{ color: "#8A8478" }}>{s.count}</span>
+                </div>
+                <div className="h-1.5 rounded-full" style={{ background: "#EEF1F1" }}>
+                  <div className="h-1.5 rounded-full" style={{ width: `${total ? (s.count / total) * 100 : 0}%`, background: s.accent }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <BarList title="Répartition par source" data={parSource} total={total} />
+        <BarList title="Répartition par support de contact" data={parSupport} total={total} />
+      </div>
+    </main>
+  );
 }
 
 function Column({ title, subtitle, accent, bg, count, children, onAdd, onDrop, isVirtual, isDragOver, onDragOverCol, onDragLeaveCol }) {
@@ -373,18 +584,33 @@ function Column({ title, subtitle, accent, bg, count, children, onAdd, onDrop, i
   );
 }
 
-function Card({ fiche, onClick, readOnlyDrag, onValidate, onReschedule }) {
+function Card({ fiche, onClick, readOnlyDrag, onValidate, onReschedule, dropIndicator, onCardDragOver }) {
   const u = urgency(fiche.dateRappel);
   const statutMeta = STATUTS.find((s) => s.id === fiche.statut);
   const [showReschedule, setShowReschedule] = useState(false);
+  const cardBg = statutMeta ? `${statutMeta.accent}14` : "#FFFFFF";
+  const isOver = dropIndicator && dropIndicator.cardId === fiche.id;
 
   return (
     <div
       draggable={!readOnlyDrag}
       onDragStart={(e) => e.dataTransfer.setData("text/plain", fiche.id)}
+      onDragOver={(e) => {
+        if (readOnlyDrag || !onCardDragOver) return;
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        const pos = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
+        onCardDragOver(pos);
+      }}
       onClick={onClick}
-      className="relative rounded-lg px-3.5 pt-4 pb-3 cursor-pointer bg-white shadow-sm hover:shadow-md transition-shadow"
-      style={{ border: "1px solid #E7E5DE" }}
+      className="relative rounded-lg px-3.5 pt-4 pb-3 cursor-pointer shadow-sm hover:shadow-md transition-shadow"
+      style={{
+        background: cardBg,
+        borderTop: isOver && dropIndicator.pos === "before" ? "2px solid #2F5233" : "1px solid #E7E5DE",
+        borderBottom: isOver && dropIndicator.pos === "after" ? "2px solid #2F5233" : "1px solid #E7E5DE",
+        borderLeft: "1px solid #E7E5DE",
+        borderRight: "1px solid #E7E5DE",
+      }}
     >
       <div className="card-tab" style={{ background: u ? URGENCY_STYLES[u].dot : "#D6D9D2" }} />
       <div className="flex items-start justify-between gap-2">
@@ -536,12 +762,27 @@ function FicheModal({ fiche, onChange, onSave, onDelete, onClose, confirmDelete,
             <Field label="Formule">
               <input className="input" value={fiche.formule} onChange={(e) => set({ formule: e.target.value })} placeholder="Ex : Suivi 3 séances" />
             </Field>
-            <Field label="Prix">
+            <Field label="Prix formule">
               <div className="relative">
                 <input type="number" className="input pr-6" value={fiche.prix} onChange={(e) => set({ prix: e.target.value })} placeholder="0" />
                 <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs" style={{ color: "#8A8478" }}>€</span>
               </div>
             </Field>
+          </div>
+
+          <div className="flex gap-2.5 items-end">
+            <Field label="Prix EDC">
+              <div className="relative">
+                <input type="number" className="input pr-6" value={fiche.prixEdc} onChange={(e) => set({ prixEdc: e.target.value })} placeholder="0" />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs" style={{ color: "#8A8478" }}>€</span>
+              </div>
+            </Field>
+            <div className="flex-1 px-3 py-2 rounded-lg" style={{ background: "#F3F5F1" }}>
+              <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: "#8A8478" }}>Total client</p>
+              <p className="text-sm font-semibold" style={{ color: "#1E2A22" }}>
+                {((Number(fiche.prix) || 0) + (Number(fiche.prixEdc) || 0)).toFixed(2)} €
+              </p>
+            </div>
           </div>
 
           <div className="flex gap-2.5">
@@ -552,6 +793,15 @@ function FicheModal({ fiche, onChange, onSave, onDelete, onClose, confirmDelete,
             </Field>
             <Field label="Prochain rdv">
               <input type="date" className="input" value={fiche.dateProchainRdv} onChange={(e) => set({ dateProchainRdv: e.target.value })} />
+            </Field>
+          </div>
+
+          <div className="flex gap-2.5">
+            <Field label="Date de prise de contact">
+              <input type="date" className="input" value={fiche.datePriseContact} onChange={(e) => set({ datePriseContact: e.target.value })} />
+            </Field>
+            <Field label="Date de fin d'accompagnement">
+              <input type="date" className="input" value={fiche.dateFinAccompagnement} onChange={(e) => set({ dateFinAccompagnement: e.target.value })} />
             </Field>
           </div>
 
@@ -611,7 +861,7 @@ function FicheModal({ fiche, onChange, onSave, onDelete, onClose, confirmDelete,
             <input className="input" value={fiche.noteRappel} onChange={(e) => set({ noteRappel: e.target.value })} placeholder="Ex : relancer pour le paiement" />
           </Field>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={() => set({ paye: !fiche.paye })}
               className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border focus:ring-2 focus:outline-none"
@@ -625,6 +875,20 @@ function FicheModal({ fiche, onChange, onSave, onDelete, onClose, confirmDelete,
               style={fiche.contratSigne ? { background: "#EAF0EA", color: "#2F5233", borderColor: "#2F5233" } : { background: "#F1F0EC", color: "#8A8478", borderColor: "#DEE1D9" }}
             >
               {fiche.contratSigne ? <Check size={14} /> : <X size={14} />} {fiche.contratSigne ? "Contrat signé" : "Contrat non signé"}
+            </button>
+            <button
+              onClick={() => set({ edcPaye: !fiche.edcPaye })}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border focus:ring-2 focus:outline-none"
+              style={fiche.edcPaye ? { background: "#EAF0EA", color: "#2F5233", borderColor: "#2F5233" } : { background: "#F5EEDD", color: "#B8863B", borderColor: "#B8863B" }}
+            >
+              {fiche.edcPaye ? <Check size={14} /> : <X size={14} />} {fiche.edcPaye ? "EDC payé" : "EDC non payé"}
+            </button>
+            <button
+              onClick={() => set({ avisOk: !fiche.avisOk })}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border focus:ring-2 focus:outline-none"
+              style={fiche.avisOk ? { background: "#EAF0EA", color: "#2F5233", borderColor: "#2F5233" } : { background: "#F1F0EC", color: "#8A8478", borderColor: "#DEE1D9" }}
+            >
+              {fiche.avisOk ? <Check size={14} /> : <X size={14} />} {fiche.avisOk ? "Avis OK" : "Avis non OK"}
             </button>
           </div>
         </div>
