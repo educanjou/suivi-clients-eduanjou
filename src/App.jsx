@@ -74,6 +74,7 @@ function emptyFiche(statut) {
     noteRappel: "",
     priorite: 3,
     ordre: null,
+    archive: false,
     statut: statut || "prospect",
   };
 }
@@ -106,6 +107,7 @@ function toRow(f) {
     note_rappel: f.noteRappel,
     priorite: f.priorite || 3,
     ordre: f.ordre ?? null,
+    archive: !!f.archive,
     statut: f.statut,
   };
 }
@@ -137,8 +139,36 @@ function fromRow(r) {
     noteRappel: r.note_rappel || "",
     priorite: r.priorite || 3,
     ordre: r.ordre ?? null,
+    archive: !!r.archive,
     statut: r.statut || "prospect",
   };
+}
+
+function exportCsv(fiches) {
+  const headers = [
+    "Prénom", "Nom", "Adresse", "Nom du chien", "Statut", "Problème", "Avancement",
+    "Support", "Source", "Formule", "Prix formule", "Prix EDC", "Total",
+    "Payé", "EDC payé", "Contrat signé", "Avis OK",
+    "Date prise de contact", "Date fin accompagnement", "Prochain rdv", "Date de rappel", "Priorité", "Archivé",
+  ];
+  const rows = fiches.map((f) => [
+    f.prenom, f.nom, f.adresse, f.nomChien,
+    STATUTS.find((s) => s.id === f.statut)?.label || f.statut,
+    f.probleme, f.avancement, f.support, f.source, f.formule,
+    f.prix || 0, f.prixEdc || 0, (Number(f.prix) || 0) + (Number(f.prixEdc) || 0),
+    f.paye ? "Oui" : "Non", f.edcPaye ? "Oui" : "Non", f.contratSigne ? "Oui" : "Non", f.avisOk ? "Oui" : "Non",
+    f.datePriseContact, f.dateFinAccompagnement, f.dateProchainRdv, f.dateRappel, f.priorite,
+    f.archive ? "Oui" : "Non",
+  ]);
+  const escape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [headers, ...rows].map((row) => row.map(escape).join(";")).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `fiches-clients-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function App() {
@@ -150,8 +180,11 @@ export default function App() {
   const [editing, setEditing] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [view, setView] = useState("board"); // board | stats
+  const [view, setView] = useState("board"); // board | stats | archive
   const [dropIndicator, setDropIndicator] = useState(null); // { cardId, pos: 'before'|'after' }
+  const [filterSource, setFilterSource] = useState("all");
+  const [filterSupport, setFilterSupport] = useState("all");
+  const [filterPriorite, setFilterPriorite] = useState("all");
 
   const loadFiches = useCallback(async () => {
     setLoadError(false);
@@ -254,6 +287,9 @@ export default function App() {
     }
   };
 
+  const archiveFiche = (id) => patchFiche(id, { archive: true });
+  const restoreFiche = (id) => patchFiche(id, { archive: false });
+
   const matchesSearch = (f) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -265,17 +301,26 @@ export default function App() {
     );
   };
 
+  const matchesFilters = (f) => {
+    if (filterSource !== "all" && f.source !== filterSource) return false;
+    if (filterSupport !== "all" && f.support !== filterSupport) return false;
+    if (filterPriorite !== "all" && String(f.priorite || 3) !== filterPriorite) return false;
+    return true;
+  };
+
+  const filtersActive = filterSource !== "all" || filterSupport !== "all" || filterPriorite !== "all";
+
   const aFaire = fiches
-    .filter((f) => matchesSearch(f) && (urgency(f.dateRappel) === "overdue" || urgency(f.dateRappel) === "today"))
+    .filter((f) => !f.archive && matchesSearch(f) && matchesFilters(f) && (urgency(f.dateRappel) === "overdue" || urgency(f.dateRappel) === "today"))
     .sort((a, b) => (a.priorite || 3) - (b.priorite || 3) || a.dateRappel.localeCompare(b.dateRappel));
 
   const byStatut = (statutId) =>
     fiches
-      .filter((f) => f.statut === statutId && matchesSearch(f))
+      .filter((f) => !f.archive && f.statut === statutId && matchesSearch(f) && matchesFilters(f))
       .sort((a, b) => (a.ordre ?? 999999) - (b.ordre ?? 999999));
 
   return (
-    <div className="min-h-screen w-full" style={{ background: "#F3F5F1", fontFamily: "'Inter', sans-serif" }}>
+    <div className="min-h-screen w-full" style={{ background: "#F3F5F1", fontFamily: "'Inter', sans-serif", paddingBottom: "env(safe-area-inset-bottom)" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap');
         .font-display { font-family: 'Fraunces', serif; }
@@ -292,18 +337,21 @@ export default function App() {
         }
       `}</style>
 
-      <header className="sticky top-0 z-20 border-b" style={{ background: "#F3F5F1F0", borderColor: "#DEE1D9", backdropFilter: "blur(6px)" }}>
+      <header className="sticky top-0 z-20 border-b" style={{ background: "#F3F5F1F0", borderColor: "#DEE1D9", backdropFilter: "blur(6px)", paddingTop: "env(safe-area-inset-top)" }}>
         <div className="max-w-[1400px] mx-auto px-4 sm:px-5 py-3 sm:py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
-            <h1 className="font-display text-xl sm:text-2xl" style={{ color: "#1E2A22" }}>
-              Éduc'Anjou <span style={{ color: "#5B6B73" }}>· Suivi clients</span>
-            </h1>
-            <p className="font-mono text-xs mt-0.5" style={{ color: "#8A8478" }}>
-              {fiches.length} fiche{fiches.length !== 1 ? "s" : ""} ·{" "}
-              {saveState === "saving" ? "enregistrement…" : saveState === "saved" ? "enregistré" : saveState === "error" ? "erreur d'enregistrement" : ""}
-            </p>
+          <div className="flex items-center gap-2.5">
+            <img src="/icons/icon-v2-192.png" alt="Éduc'Anjou" className="w-9 h-9 rounded-lg shrink-0" style={{ border: "1px solid #DEE1D9" }} />
+            <div>
+              <h1 className="font-display text-xl sm:text-2xl" style={{ color: "#1E2A22" }}>
+                Éduc'Anjou <span style={{ color: "#5B6B73" }}>· Suivi clients</span>
+              </h1>
+              <p className="font-mono text-xs mt-0.5" style={{ color: "#8A8478" }}>
+                {fiches.filter((f) => !f.archive).length} fiche{fiches.filter((f) => !f.archive).length !== 1 ? "s" : ""} ·{" "}
+                {saveState === "saving" ? "enregistrement…" : saveState === "saved" ? "enregistré" : saveState === "error" ? "erreur d'enregistrement" : ""}
+              </p>
+            </div>
           </div>
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             <div className="flex rounded-lg overflow-hidden border shrink-0" style={{ borderColor: "#DEE1D9" }}>
               <button
                 onClick={() => setView("board")}
@@ -318,6 +366,13 @@ export default function App() {
                 style={view === "stats" ? { background: "#2F5233", color: "#FFFFFF" } : { background: "#FFFFFF", color: "#5B6B73" }}
               >
                 📊 Statistiques
+              </button>
+              <button
+                onClick={() => setView("archive")}
+                className="px-3 py-2 text-sm font-medium focus:outline-none"
+                style={view === "archive" ? { background: "#2F5233", color: "#FFFFFF" } : { background: "#FFFFFF", color: "#5B6B73" }}
+              >
+                🗄️ Archivés
               </button>
             </div>
             {view === "board" && (
@@ -341,12 +396,47 @@ export default function App() {
                 <Plus size={16} /> Nouvelle fiche
               </button>
             )}
+            <button
+              onClick={() => exportCsv(fiches)}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border focus:ring-2 focus:outline-none"
+              style={{ background: "#FFFFFF", color: "#5B6B73", borderColor: "#DEE1D9" }}
+              title="Exporter toutes les fiches en CSV"
+            >
+              ⬇️ Export CSV
+            </button>
           </div>
         </div>
+        {view === "board" && (
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-5 pb-3 flex flex-wrap items-center gap-2">
+            <select value={filterSource} onChange={(e) => setFilterSource(e.target.value)} className="text-xs px-2.5 py-1.5 rounded-lg border outline-none" style={{ borderColor: "#DEE1D9", background: "#FFFFFF", color: "#1E2A22" }}>
+              <option value="all">Toutes les sources</option>
+              {SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select value={filterSupport} onChange={(e) => setFilterSupport(e.target.value)} className="text-xs px-2.5 py-1.5 rounded-lg border outline-none" style={{ borderColor: "#DEE1D9", background: "#FFFFFF", color: "#1E2A22" }}>
+              <option value="all">Tous les supports</option>
+              {SUPPORTS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select value={filterPriorite} onChange={(e) => setFilterPriorite(e.target.value)} className="text-xs px-2.5 py-1.5 rounded-lg border outline-none" style={{ borderColor: "#DEE1D9", background: "#FFFFFF", color: "#1E2A22" }}>
+              <option value="all">Toutes priorités</option>
+              {[1, 2, 3, 4, 5].map((p) => <option key={p} value={p}>{PRIORITY_STYLES[p].label}</option>)}
+            </select>
+            {filtersActive && (
+              <button
+                onClick={() => { setFilterSource("all"); setFilterSupport("all"); setFilterPriorite("all"); }}
+                className="text-xs font-medium underline"
+                style={{ color: "#B3432B" }}
+              >
+                Réinitialiser
+              </button>
+            )}
+          </div>
+        )}
       </header>
 
       {view === "stats" ? (
-        <StatsPage fiches={fiches} />
+        <StatsPage fiches={fiches.filter((f) => !f.archive)} />
+      ) : view === "archive" ? (
+        <ArchivePage fiches={fiches.filter((f) => f.archive)} onRestore={restoreFiche} onDeleteForever={deleteFiche} />
       ) : (
       <main className="max-w-[1400px] mx-auto px-4 sm:px-5 py-6 overflow-x-auto">
         {!loaded ? (
@@ -419,7 +509,11 @@ export default function App() {
             setConfirmDelete(false);
           }}
           confirmDelete={confirmDelete}
-          onConfirmDelete={() => deleteFiche(editing.id)}
+          onConfirmDelete={() => {
+            archiveFiche(editing.id);
+            setEditing(null);
+            setConfirmDelete(false);
+          }}
           onCancelDelete={() => setConfirmDelete(false)}
           isNew={!fiches.some((f) => f.id === editing.id)}
         />
@@ -461,6 +555,57 @@ function BarList({ title, data, total }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function ArchivePage({ fiches, onRestore, onDeleteForever }) {
+  const [confirmId, setConfirmId] = useState(null);
+
+  return (
+    <main className="max-w-[1400px] mx-auto px-4 sm:px-5 py-6">
+      <h2 className="font-display text-xl mb-1" style={{ color: "#1E2A22" }}>Fiches archivées</h2>
+      <p className="text-sm mb-4" style={{ color: "#8A8478" }}>
+        Ces fiches ne sont plus visibles dans le tableau ni dans les statistiques. Tu peux les restaurer à tout moment, ou les supprimer définitivement.
+      </p>
+      {fiches.length === 0 ? (
+        <EmptyState text="Aucune fiche archivée pour le moment." />
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {fiches.map((f) => (
+            <div key={f.id} className="rounded-lg p-3.5 bg-white" style={{ border: "1px solid #E7E5DE" }}>
+              <p className="text-sm font-semibold" style={{ color: "#1E2A22" }}>{f.prenom} {f.nom}</p>
+              {f.nomChien && <p className="text-xs italic" style={{ color: "#5B6B73" }}>🐾 {f.nomChien}</p>}
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={() => onRestore(f.id)}
+                  className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border focus:ring-2 focus:outline-none"
+                  style={{ background: "#EAF0EA", color: "#2F5233", borderColor: "#2F5233" }}
+                >
+                  Restaurer
+                </button>
+                {confirmId === f.id ? (
+                  <button
+                    onClick={() => { onDeleteForever(f.id); setConfirmId(null); }}
+                    className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium"
+                    style={{ background: "#B3432B", color: "#FFFFFF" }}
+                  >
+                    Confirmer ?
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setConfirmId(f.id)}
+                    className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium border focus:ring-2 focus:outline-none"
+                    style={{ background: "#F7E7E2", color: "#B3432B", borderColor: "#B3432B" }}
+                  >
+                    Supprimer définitivement
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </main>
   );
 }
 
@@ -584,6 +729,17 @@ function Column({ title, subtitle, accent, bg, count, children, onAdd, onDrop, i
   );
 }
 
+function Pill({ ok, okLabel, koLabel }) {
+  return (
+    <span
+      className="text-[10px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap"
+      style={ok ? { background: "#EAF0EA", color: "#2F5233" } : { background: "#F7E7E2", color: "#B3432B" }}
+    >
+      {ok ? okLabel : koLabel}
+    </span>
+  );
+}
+
 function Card({ fiche, onClick, readOnlyDrag, onValidate, onReschedule, dropIndicator, onCardDragOver }) {
   const u = urgency(fiche.dateRappel);
   const statutMeta = STATUTS.find((s) => s.id === fiche.statut);
@@ -626,21 +782,13 @@ function Card({ fiche, onClick, readOnlyDrag, onValidate, onReschedule, dropIndi
           )}
           <p className="text-sm font-semibold leading-tight" style={{ color: "#1E2A22" }}>{fiche.prenom} {fiche.nom}</p>
         </div>
-        <div className="flex flex-col items-end gap-0.5 shrink-0">
-          {fiche.paye ? (
-            <span className="flex items-center gap-1" title="Payé" style={{ color: "#2F5233" }}>
-              <Check size={12} /><span className="font-mono text-[10px]">payé</span>
-            </span>
-          ) : (
-            <span className="font-mono text-[10px]" style={{ color: "#B3432B" }}>impayé</span>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <Pill ok={fiche.paye} okLabel="payé" koLabel="non payé" />
+          {fiche.statut !== "prospect" && fiche.statut !== "edc" && (
+            <Pill ok={fiche.contratSigne} okLabel="contrat" koLabel="sans contrat" />
           )}
-          {fiche.contratSigne ? (
-            <span className="flex items-center gap-1" title="Contrat signé" style={{ color: "#2F5233" }}>
-              <Check size={12} /><span className="font-mono text-[10px]">contrat</span>
-            </span>
-          ) : (
-            <span className="font-mono text-[10px]" style={{ color: "#C97A2B" }}>sans contrat</span>
-          )}
+          <Pill ok={fiche.edcPaye} okLabel="EDC payé" koLabel="EDC non payé" />
+          <Pill ok={fiche.avisOk} okLabel="avis ok" koLabel="avis non ok" />
         </div>
       </div>
       {fiche.adresse && <p className="text-[11px] mt-0.5" style={{ color: "#8A8478" }}>📍 {fiche.adresse}</p>}
@@ -897,13 +1045,13 @@ function FicheModal({ fiche, onChange, onSave, onDelete, onClose, confirmDelete,
           {!isNew ? (
             confirmDelete ? (
               <div className="flex items-center gap-2 text-xs">
-                <span style={{ color: "#B3432B" }}>Supprimer définitivement ?</span>
+                <span style={{ color: "#B3432B" }}>Archiver cette fiche ?</span>
                 <button onClick={onConfirmDelete} className="font-medium underline" style={{ color: "#B3432B" }}>Oui</button>
                 <button onClick={onCancelDelete} style={{ color: "#8A8478" }}>Annuler</button>
               </div>
             ) : (
               <button onClick={onDelete} className="flex items-center gap-1.5 text-xs font-medium focus:ring-2 focus:outline-none" style={{ color: "#B3432B" }}>
-                <Trash2 size={14} /> Supprimer
+                <Trash2 size={14} /> Archiver
               </button>
             )
           ) : <span />}
